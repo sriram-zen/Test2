@@ -1,62 +1,36 @@
-import { createServerClient } from "@supabase/ssr";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server'
+import { createMiddlewareSupabaseClient } from '@supabase/auth-helpers-nextjs'
 
-export const updateSession = async (request: NextRequest) => {
-  // This `try/catch` block is only here for the interactive tutorial.
-  // Feel free to remove once you have Supabase connected.
-  try {
-    // Create an unmodified response
-    let response = NextResponse.next({
-      request: {
-        headers: request.headers,
-      },
-    });
+// This middleware updates the Supabase session and enforces RBAC with logging for compliance.
+export async function middleware(req: NextRequest) {
+  const res = NextResponse.next()
+  const supabase = createMiddlewareSupabaseClient({ req, res })
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return request.cookies.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value }) =>
-              request.cookies.set(name, value),
-            );
-            response = NextResponse.next({
-              request,
-            });
-            cookiesToSet.forEach(({ name, value, options }) =>
-              response.cookies.set(name, value, options),
-            );
-          },
-        },
-      },
-    );
-
-    // This will refresh session if expired - required for Server Components
-    // https://supabase.com/docs/guides/auth/server-side/nextjs
-    const user = await supabase.auth.getUser();
-
-    // protected routes
-    if (request.nextUrl.pathname.startsWith("/protected") && user.error) {
-      return NextResponse.redirect(new URL("/sign-in", request.url));
-    }
-
-    if (request.nextUrl.pathname === "/" && !user.error) {
-      return NextResponse.redirect(new URL("/protected", request.url));
-    }
-
-    return response;
-  } catch (e) {
-    // If you are here, a Supabase client could not be created!
-    // This is likely because you have not set up environment variables.
-    // Check out http://localhost:3000 for Next Steps.
-    return NextResponse.next({
-      request: {
-        headers: request.headers,
-      },
-    });
+  // Basic data access logging (could be extended to a table/log service)
+  if (user) {
+    // Example: log route and user email for compliance
+    // In production, store this in a Supabase table via API route/server action
+    console.info(`[COMPLIANCE LOG] User: ${user.email}, Path: ${req.nextUrl.pathname}, Time: ${new Date().toISOString()}`)
   }
-};
+
+  // RBAC: Only allow admins to access certain /admin routes
+  if (req.nextUrl.pathname.startsWith('/(admin)')) {
+    if (!user || !(user.user_metadata?.is_admin || user?.role === 'admin')) {
+      return NextResponse.redirect(new URL('/sign-in', req.url))
+    }
+  }
+
+  // Enforce RLS: All sensitive tables in Supabase must have RLS enabled and policies set (see migrations)
+
+  return res
+}
+
+export const config = {
+  matcher: [
+    '/(admin)/:path*', // Protect all /admin routes
+    // Optionally add more routes as needed
+  ],
+}
